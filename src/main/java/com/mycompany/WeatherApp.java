@@ -1,3 +1,4 @@
+
 package com.mycompany;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -11,15 +12,21 @@ import java.net.http.HttpResponse;
 
 public class WeatherApp {
     public static void main(String[] args) throws IOException, InterruptedException {
-        String url = "https://api.weather.yandex.ru/v2/forecast?lat=55.75&lon=37.62&limit=3";
+
+        int limit = 3;
         String apiKey = System.getenv("YANDEX_WEATHER_API_KEY");
-        HttpClient client = HttpClient.newHttpClient();
-        ObjectMapper objectMapper = new ObjectMapper();
 
         if (apiKey == null || apiKey.isBlank()) {
-            System.out.println("Переменная окружения не задана!");
+            System.out.println("Ошибка: API-ключ не задан!");
             return;
         }
+
+        if (limit <= 0) {
+            System.out.println("Ошибка: limit должен быть больше 0!");
+            return;
+        }
+
+        String url = "https://api.weather.yandex.ru/v2/forecast?lat=55.75&lon=37.62&limit=" + limit;
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
@@ -27,37 +34,58 @@ public class WeatherApp {
                 .GET()
                 .build();
 
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpClient client = HttpClient.newHttpClient();
+        HttpResponse<String> response = client.send(
+                request, HttpResponse.BodyHandlers.ofString()
+        );
 
         if (response.statusCode() != 200) {
-            System.out.println("Ответ сервера не равен 200");
+            System.out.printf("Ошибка HTTP: %d%n", response.statusCode());
             return;
         }
 
-        JsonNode root = objectMapper.readTree(response.body());
+        ObjectMapper mapper = new ObjectMapper();
+        JsonNode root = mapper.readTree(response.body());
 
-        int temperature = root.path("fact").path("temp").asInt();
-
+        JsonNode temp = root.path("fact").path("temp");
         JsonNode forecasts = root.path("forecasts");
+
+        if (!temp.isNumber()) {
+            System.out.println("Ошибка: текущая температура отсутствует!");
+            return;
+        }
+
+        if (!forecasts.isArray() || forecasts.size() < limit) {
+            System.out.println("Ошибка: недостаточно данных прогноза!");
+            return;
+        }
+
         double sum = 0;
 
-        for (JsonNode forecast : forecasts) {
-            sum += forecast.path("parts").path("day").path("temp_avg").asDouble();
+        for (int i = 0; i < limit; i++) {
+            JsonNode dayTemp = forecasts.get(i)
+                    .path("parts")
+                    .path("day")
+                    .path("temp_avg");
 
+            if (!dayTemp.isNumber()) {
+                System.out.printf("Ошибка: нет температуры за день %d%n", i + 1);
+                return;
+            }
+
+            sum += dayTemp.asDouble();
         }
 
-        double averageTemperature = 0;
+        double averageTemperature = sum / limit;
 
-        if (!forecasts.isEmpty()) {
-            averageTemperature = sum / forecasts.size();
-        } else {
-            System.out.println("Массив прогнозов пуст");
-            return;
-        }
-
-
-        System.out.printf("Полный JSON-ответ : %s%nТекущая температура : %d%nСредняя температура прогноза : %.2f",
-                response.body(), temperature, averageTemperature);
-
+        System.out.printf("""
+                
+                ===== ЯНДЕКС ПОГОДА =====
+                Полный JSON-ответ: %s
+                Текущая температура: %d °C
+                Средняя температура за %d дня: %.2f °C
+                ========================
+                %n""",
+                response.body(), temp.asInt(), limit, averageTemperature);
     }
 }
